@@ -54,7 +54,7 @@ export default function Home() {
           >
             <div className="inline-flex items-center gap-2 bg-muted px-3 py-1 rounded-full text-sm text-muted-foreground mb-6">
               <Lock className="w-4 h-4" />
-              Cryptographically Guaranteed One-Time Secrets
+              Cryptographically Guaranteed Controlled-Access Secrets
             </div>
           </motion.div>
 
@@ -78,7 +78,7 @@ export default function Home() {
             transition={{ duration: 0.8, delay: 0.4 }}
           >
             Share sensitive information with cryptographic guarantees. 
-            Decentralized storage, client-side encryption, one-time access.
+            Decentralized storage, client-side encryption, controlled access limits.
           </motion.p>
 
           <motion.div 
@@ -122,18 +122,18 @@ export default function Home() {
           {[
             {
               icon: Shield,
-              title: "Zero-Knowledge",
-              description: "Client-side encryption ensures your secrets never leave your device unencrypted.",
+              title: "End-to-End Encrypted",
+              description: "Client-side AES-256 encryption ensures your secrets never leave your device unencrypted.",
             },
             {
               icon: Database,
-              title: "Decentralized",
+              title: "Decentralized Storage",
               description: "Stored on Walrus network with no single point of failure or censorship.",
             },
             {
               icon: Eye,
-              title: "One-Time Only",
-              description: "Cryptographically guaranteed self-destruction after a single access.",
+              title: "Controlled Access",
+              description: "Configure 1-5 views with cryptographic guarantees that prevent unauthorized access.",
             },
           ].map((feature, index) => (
             <motion.div
@@ -188,7 +188,7 @@ export default function Home() {
               <span className="font-bold">FlameLink</span>
             </div>
             <div className="text-muted-foreground text-sm text-center">
-              Decentralized • Zero-knowledge • One-time access
+              Decentralized • End-to-End Encrypted • Controlled Access
             </div>
           </div>
         </div>

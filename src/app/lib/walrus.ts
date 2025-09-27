@@ -4,8 +4,8 @@
  */
 
 // Walrus Testnet endpoints
-const WALRUS_PUBLISHER = 'https://publisher.walrus-testnet.walrus.space'
-const WALRUS_AGGREGATOR = 'https://aggregator.walrus-testnet.walrus.space'
+const WALRUS_PUBLISHER = 'http://walrus-publisher-testnet.haedal.xyz:9001'
+const WALRUS_AGGREGATOR = 'https://walrus-testnet.blockscope.net'
 
 export interface WalrusStoreResponse {
   newlyCreated?: {
