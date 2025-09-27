@@ -2,9 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import { decryptSecret, parseSecretUrl, xorShares } from '../../lib/crypto'
+import { motion } from 'framer-motion'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Shield, Eye, AlertTriangle, Copy, Check, ArrowLeft, Flame } from 'lucide-react'
+import { decryptSecret, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from '../../lib/crypto'
 import { retrieveSecret, burnSecret } from '../../lib/walrus'
-import SecretView from '../../components/SecretView'
 
 type ViewState = 'ready' | 'retrieving' | 'decrypting' | 'success' | 'burned' | 'error'
 
@@ -14,6 +18,7 @@ export default function SecretPage() {
   const [secret, setSecret] = useState('')
   const [error, setError] = useState('')
   const [progress, setProgress] = useState('')
+  const [copied, setCopied] = useState(false)
   const [parsed, setParsed] = useState<{
     blobId: string;
     key?: ArrayBuffer;
@@ -82,7 +87,7 @@ export default function SecretPage() {
           throw new Error(await res.text().catch(() => 'Claim failed'))
         }
         const { share2B64Url } = await res.json()
-        const share2 = new Uint8Array(await (await fetch(`data:;base64,${share2B64Url}`)).arrayBuffer())
+        const share2 = new Uint8Array(base64UrlToArrayBuffer(share2B64Url))
         const combined = xorShares(parsed.keyShare1 as Uint8Array, share2)
         fullKey = combined.buffer
       }
@@ -117,138 +122,226 @@ export default function SecretPage() {
     window.location.href = '/'
   }
 
+  const copySecret = async () => {
+    await navigator.clipboard.writeText(secret)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  // Loading state
   if (state === 'retrieving' || state === 'decrypting') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-        <div className="container mx-auto px-4 py-8">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <h1 className="text-6xl font-bold mb-4">
-              <span className="text-orange-500">🔥</span> FlameLink
-            </h1>
-            <p className="text-xl text-gray-600 dark:text-gray-300">
-              Decentralized One-Time Secrets
-            </p>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3 }}
+          className="text-center max-w-md mx-auto"
+        >
+          <div className="w-16 h-16 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-6"></div>
+          <h2 className="text-2xl font-bold mb-2">
+            {state === 'retrieving' ? 'Retrieving Secret' : 'Decrypting Secret'}
+          </h2>
+          <p className="text-muted-foreground mb-4">{progress}</p>
+          <div className="w-full bg-muted rounded-full h-2">
+            <motion.div 
+              className="bg-primary h-2 rounded-full"
+              initial={{ width: "0%" }}
+              animate={{ width: state === 'retrieving' ? '30%' : '80%' }}
+              transition={{ duration: 1 }}
+            />
           </div>
-
-          {/* Loading State */}
-          <div className="max-w-lg mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-            <div className="text-6xl mb-4 animate-spin">🔄</div>
-            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-4">
-              {state === 'retrieving' ? 'Retrieving Secret...' : 'Decrypting Secret...'}
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-4">
-              {progress}
-            </p>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-              <div 
-                className="bg-orange-500 h-2 rounded-full transition-all duration-1000"
-                style={{ 
-                  width: state === 'retrieving' ? '30%' : '80%' 
-                }}
-              ></div>
-            </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
-              🛡️ Processing securely in your browser
-            </p>
-          </div>
-        </div>
+          <p className="text-xs text-muted-foreground mt-4">
+            🛡️ Processing securely in your browser
+          </p>
+        </motion.div>
       </div>
     )
   }
 
+  // Ready state
   if (state === 'ready') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      <div className="min-h-screen bg-background">
         <div className="container mx-auto px-4 py-8">
-          <div className="text-center mb-12">
-            <h1 className="text-6xl font-bold mb-4">
-              <span className="text-orange-500">🔥</span> FlameLink
-            </h1>
-            <p className="text-xl text-gray-600 dark:text-gray-300">
-              Decentralized One-Time Secrets
-            </p>
-          </div>
-
-          <div className="max-w-lg mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-            <div className="text-6xl mb-4">👁️</div>
-            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-4">
-              Click to Reveal Secret
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">
-              The secret is encrypted and stored on Walrus. It will be retrieved and decrypted only after you click reveal, and then burned.
-            </p>
-            <button
-              onClick={handleReveal}
-              className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
-            >
-              Reveal Secret
-            </button>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
-              ⚠️ If this link was shared with multiple people, the first to reveal will see the secret.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (state === 'success') {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-        <div className="container mx-auto px-4 py-8">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <h1 className="text-6xl font-bold mb-4">
-              <span className="text-orange-500">🔥</span> FlameLink
-            </h1>
-            <p className="text-xl text-gray-600 dark:text-gray-300">
-              Decentralized One-Time Secrets
-            </p>
+          <div className="flex items-center gap-4 mb-8">
+            <Link href="/">
+              <Button variant="ghost" size="sm">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Home
+              </Button>
+            </Link>
           </div>
 
           <div className="max-w-2xl mx-auto">
-            <SecretView secret={secret} onNewSecret={handleNewSecret} />
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
+            >
+              <Card className="p-8 text-center">
+                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Eye className="w-8 h-8 text-primary" />
+                </div>
+                <h1 className="text-3xl font-bold mb-4">One-Time Secret</h1>
+                <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
+                  This secret is encrypted and stored securely. It will be permanently destroyed after you reveal it.
+                </p>
+                
+                <Button onClick={handleReveal} size="lg" className="px-12 py-6 text-lg">
+                  <Eye className="w-5 h-5 mr-2" />
+                  Reveal Secret
+                </Button>
+
+                <div className="mt-8 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                    ⚠️ Warning: This link works only once. If multiple people have access, the first person to click will see the secret.
+                  </p>
+                </div>
+              </Card>
+            </motion.div>
           </div>
         </div>
       </div>
     )
   }
 
-  if (state === 'burned') {
+  // Success state
+  if (state === 'success') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      <div className="min-h-screen bg-background">
         <div className="container mx-auto px-4 py-8">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <h1 className="text-6xl font-bold mb-4">
-              <span className="text-orange-500">🔥</span> FlameLink
-            </h1>
-            <p className="text-xl text-gray-600 dark:text-gray-300">
-              Decentralized One-Time Secrets
-            </p>
+          <div className="flex items-center gap-4 mb-8">
+            <Link href="/">
+              <Button variant="ghost" size="sm">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Home
+              </Button>
+            </Link>
           </div>
 
-          <div className="max-w-lg mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-            <div className="text-6xl mb-4">🔥</div>
-            <h2 className="text-2xl font-bold text-red-600 dark:text-red-400 mb-4">
-              Secret Already Burned
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">
-              This secret has already been accessed and permanently destroyed.
-              Even the original sender cannot recover it.
-            </p>
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-6">
-              <p className="text-red-600 dark:text-red-400 text-sm">
-                🔥 This is the security guarantee of FlameLink - once burned, secrets are cryptographically impossible to recover.
-              </p>
-            </div>
-            <button
-              onClick={handleNewSecret}
-              className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+          <div className="max-w-2xl mx-auto">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
             >
-              Create Your Own Secret
-            </button>
+              <Card className="p-8">
+                <div className="text-center mb-8">
+                  <div className="w-16 h-16 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Shield className="w-8 h-8 text-green-600 dark:text-green-400" />
+                  </div>
+                  <h1 className="text-3xl font-bold mb-2">Secret Revealed</h1>
+                  <p className="text-muted-foreground">
+                    The secret has been successfully retrieved and permanently destroyed from storage.
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Your Secret</label>
+                    <div className="relative">
+                      <div className="p-4 bg-muted rounded-md font-mono text-sm whitespace-pre-wrap break-all min-h-[100px]">
+                        {secret}
+                      </div>
+                      <Button 
+                        onClick={copySecret} 
+                        size="sm" 
+                        className="absolute top-2 right-2"
+                        variant="secondary"
+                      >
+                        {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                    {copied && (
+                      <p className="text-sm text-green-600 dark:text-green-400 mt-2">✓ Copied to clipboard</p>
+                    )}
+                  </div>
+
+                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Flame className="w-5 h-5 text-red-600 dark:text-red-400" />
+                      <h3 className="font-semibold text-red-800 dark:text-red-200">Secret Burned Forever</h3>
+                    </div>
+                    <p className="text-sm text-red-700 dark:text-red-300">
+                      This secret has been permanently destroyed. Even the original sender cannot recover it. 
+                      Make sure to save it now if needed.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <Link href="/create" className="flex-1">
+                      <Button className="w-full">
+                        Create Your Own Secret
+                      </Button>
+                    </Link>
+                    <Link href="/" className="flex-1">
+                      <Button variant="outline" className="w-full">
+                        Back to Home
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Burned state
+  if (state === 'burned') {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex items-center gap-4 mb-8">
+            <Link href="/">
+              <Button variant="ghost" size="sm">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Home
+              </Button>
+            </Link>
+          </div>
+
+          <div className="max-w-2xl mx-auto">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
+            >
+              <Card className="p-8 text-center">
+                <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Flame className="w-8 h-8 text-red-600 dark:text-red-400" />
+                </div>
+                <h1 className="text-3xl font-bold mb-4 text-red-600 dark:text-red-400">
+                  Secret Already Burned
+                </h1>
+                <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
+                  This secret has already been accessed and permanently destroyed. 
+                  Even the original sender cannot recover it.
+                </p>
+
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-8">
+                  <p className="text-sm text-red-700 dark:text-red-300">
+                    🔥 This is the security guarantee of FlameLink - once burned, secrets are cryptographically impossible to recover.
+                  </p>
+                </div>
+
+                <div className="flex gap-4 justify-center">
+                  <Link href="/create">
+                    <Button>
+                      Create Your Own Secret
+                    </Button>
+                  </Link>
+                  <Link href="/">
+                    <Button variant="outline">
+                      Back to Home
+                    </Button>
+                  </Link>
+                </div>
+              </Card>
+            </motion.div>
           </div>
         </div>
       </div>
@@ -257,37 +350,54 @@ export default function SecretPage() {
 
   // Error state
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+    <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-6xl font-bold mb-4">
-            <span className="text-orange-500">🔥</span> FlameLink
-          </h1>
-          <p className="text-xl text-gray-600 dark:text-gray-300">
-            Decentralized One-Time Secrets
-          </p>
+        <div className="flex items-center gap-4 mb-8">
+          <Link href="/">
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Home
+            </Button>
+          </Link>
         </div>
 
-        <div className="max-w-lg mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-          <div className="text-6xl mb-4">❌</div>
-          <h2 className="text-2xl font-bold text-red-600 dark:text-red-400 mb-4">
-            Error Loading Secret
-          </h2>
-          <p className="text-gray-600 dark:text-gray-300 mb-6">
-            {error || 'An unexpected error occurred while retrieving the secret.'}
-          </p>
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-6">
-            <p className="text-yellow-700 dark:text-yellow-300 text-sm">
-              💡 Common causes: Invalid link, network issues, or secret has already been accessed.
-            </p>
-          </div>
-          <button
-            onClick={handleNewSecret}
-            className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+        <div className="max-w-2xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
           >
-            Go to Homepage
-          </button>
+            <Card className="p-8 text-center">
+              <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+              </div>
+              <h1 className="text-3xl font-bold mb-4 text-red-600 dark:text-red-400">
+                Error Loading Secret
+              </h1>
+              <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
+                {error || 'An unexpected error occurred while retrieving the secret.'}
+              </p>
+
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-8">
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  💡 Common causes: Invalid link, network issues, or secret has already been accessed.
+                </p>
+              </div>
+
+              <div className="flex gap-4 justify-center">
+                <Link href="/create">
+                  <Button>
+                    Create New Secret
+                  </Button>
+                </Link>
+                <Link href="/">
+                  <Button variant="outline">
+                    Back to Home
+                  </Button>
+                </Link>
+              </div>
+            </Card>
+          </motion.div>
         </div>
       </div>
     </div>
