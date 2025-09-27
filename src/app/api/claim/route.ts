@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const store = globalThis as unknown as {
-  __fl_claims?: Map<string, { share2: string; tokenHash: string; expiresAt: number; claimed: boolean }>
+  __fl_claims?: Map<string, { share2: string; tokenHash: string; expiresAt: number; maxUses: number; usesRemaining: number }>
 }
 
 function fromBase64Url(b64url: string): string {
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const entry = store.__fl_claims.get(claimId)
     if (!entry) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    if (entry.claimed) return NextResponse.json({ error: 'Already claimed' }, { status: 409 })
+    if (entry.usesRemaining <= 0) return NextResponse.json({ error: 'All uses exhausted' }, { status: 409 })
     if (Date.now() > entry.expiresAt) {
       store.__fl_claims.delete(claimId)
       return NextResponse.json({ error: 'Expired' }, { status: 410 })
@@ -33,10 +33,21 @@ export async function POST(req: NextRequest) {
     const tokenHash = await sha256Base64Url(token)
     if (tokenHash !== entry.tokenHash) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    entry.claimed = true
-    store.__fl_claims.set(claimId, entry)
+    // Decrement uses remaining
+    entry.usesRemaining = entry.usesRemaining - 1
+    
+    // Clean up if no uses remaining
+    if (entry.usesRemaining <= 0) {
+      store.__fl_claims.delete(claimId)
+    } else {
+      store.__fl_claims.set(claimId, entry)
+    }
 
-    return NextResponse.json({ share2B64Url: entry.share2 })
+    return NextResponse.json({ 
+      share2B64Url: entry.share2,
+      usesRemaining: entry.usesRemaining,
+      maxUses: entry.maxUses
+    })
   } catch (e) {
     return NextResponse.json({ error: 'Claim failed' }, { status: 500 })
   }

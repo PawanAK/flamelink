@@ -7,7 +7,7 @@ import { useParams } from "next/navigation"
 import { motion } from "framer-motion"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Copy, Check, Lock, Shield, AlertTriangle, Download, File } from "lucide-react"
+import { ArrowLeft, Copy, Check, Lock, Shield, AlertTriangle, Download, File, Users } from "lucide-react"
 import { isEncryptedFile, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from "../../lib/crypto"
 import { retrieveSecret, burnSecret } from "../../lib/walrus"
 
@@ -29,6 +29,7 @@ export default function SecretPage() {
   const [progress, setProgress] = useState("")
   const [copied, setCopied] = useState(false)
   const [autoDownloadTriggered, setAutoDownloadTriggered] = useState(false)
+  const [usageInfo, setUsageInfo] = useState<{usesRemaining: number; maxUses: number} | null>(null)
   const [parsed, setParsed] = useState<{
     blobId: string
     key?: ArrayBuffer
@@ -102,6 +103,8 @@ export default function SecretPage() {
             if (errorData.error) {
               if (errorData.error === "Already claimed" || errorData.error.includes("Already claimed")) {
                 errorMessage = "This secret has already been accessed and destroyed"
+              } else if (errorData.error === "All uses exhausted" || errorData.error.includes("All uses exhausted")) {
+                errorMessage = "All views of this secret have been used and it has been destroyed"
               } else {
                 errorMessage = errorData.error
               }
@@ -109,6 +112,8 @@ export default function SecretPage() {
           } catch {
             if (errorText.includes("Already claimed")) {
               errorMessage = "This secret has already been accessed and destroyed"
+            } else if (errorText.includes("All uses exhausted")) {
+              errorMessage = "All views of this secret have been used and it has been destroyed"
             } else {
               errorMessage = errorText
             }
@@ -116,7 +121,13 @@ export default function SecretPage() {
 
           throw new Error(errorMessage)
         }
-        const { share2B64Url } = await res.json()
+        const { share2B64Url, usesRemaining, maxUses } = await res.json()
+        
+        // Store usage information
+        if (typeof usesRemaining === 'number' && typeof maxUses === 'number') {
+          setUsageInfo({ usesRemaining, maxUses })
+        }
+        
         const share2 = new Uint8Array(base64UrlToArrayBuffer(share2B64Url))
         const combined = xorShares(parsed.keyShare1 as Uint8Array, share2)
         fullKey = combined.buffer as ArrayBuffer
@@ -191,7 +202,7 @@ export default function SecretPage() {
       if (err instanceof Error) {
         if (err.message.includes("burned") || err.message.includes("BURNED")) {
           setState("burned")
-        } else if (err.message.includes("already been accessed") || err.message.includes("Already claimed")) {
+        } else if (err.message.includes("already been accessed") || err.message.includes("Already claimed") || err.message.includes("All uses exhausted")) {
           setState("burned")
         } else if (err.message.includes("not found")) {
           setError("Secret not found or has expired")
@@ -376,6 +387,26 @@ export default function SecretPage() {
                     </div>
                   </div>
                 ) : null}
+
+                {/* Usage Information */}
+                {usageInfo && usageInfo.maxUses > 1 && (
+                  <div className="bg-muted/30 border border-border rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <Users className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">
+                          {usageInfo.usesRemaining > 0 
+                            ? `This secret can be viewed ${usageInfo.usesRemaining} more time${usageInfo.usesRemaining === 1 ? '' : 's'} before it's permanently destroyed.`
+                            : "This was the final view of this secret. It has been permanently destroyed."
+                          }
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {usageInfo.maxUses - usageInfo.usesRemaining} of {usageInfo.maxUses} views used
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex gap-3 pt-2">
                   <Link href="/create" className="flex-1">

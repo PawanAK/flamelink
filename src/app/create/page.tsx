@@ -7,7 +7,7 @@ import { motion } from "framer-motion"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, Copy, Check, Lock, Shield, FileText, Upload } from "lucide-react"
+import { ArrowLeft, Copy, Check, Lock, Shield, FileText, Upload, Users, Database, ExternalLink } from "lucide-react"
 import { encryptSecret, encryptFile, splitKeyXor, arrayBufferToBase64Url, generateSecretUrlKeySplit } from "../lib/crypto"
 import { storeSecret, storeFile } from "../lib/walrus"
 import FileUpload from "../components/FileUpload"
@@ -21,8 +21,11 @@ export default function CreatePage() {
   const [secret, setSecret] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [secretLink, setSecretLink] = useState("")
+  const [blobId, setBlobId] = useState("")
   const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
+  const [blobIdCopied, setBlobIdCopied] = useState(false)
+  const [maxRecipients, setMaxRecipients] = useState(1)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -74,7 +77,11 @@ export default function CreatePage() {
       }
 
       // Step 3: Store on Walrus
-      const { blobId } = await storeSecret(combinedData.buffer as ArrayBuffer)
+      console.log('🔄 About to store on Walrus, data size:', combinedData.length)
+      const { blobId: walrusBlobId } = await storeSecret(combinedData.buffer as ArrayBuffer)
+      console.log('🎯 Got blobId from Walrus:', walrusBlobId)
+      setBlobId(walrusBlobId)
+      console.log('✅ BlobId state updated:', walrusBlobId)
 
       // Step 4: Split key and initialize one-time claim gate
       const { share1, share2 } = splitKeyXor(encrypted.key)
@@ -82,7 +89,11 @@ export default function CreatePage() {
       const initRes = await fetch("/api/claim/init", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ share2B64Url: arrayBufferToBase64Url(share2), ttlSeconds: 3600 }),
+        body: JSON.stringify({ 
+          share2B64Url: arrayBufferToBase64Url(share2), 
+          ttlSeconds: 3600,
+          maxUses: maxRecipients
+        }),
       })
       if (!initRes.ok) {
         const msg = await initRes.text().catch(() => "Failed to initialize claim gate")
@@ -91,7 +102,7 @@ export default function CreatePage() {
       const { claimId, token } = await initRes.json()
 
       // Step 5: Generate shareable URL with key share and claim info
-      const secretUrl = generateSecretUrlKeySplit(blobId, share1, encrypted.iv, claimId, token)
+      const secretUrl = generateSecretUrlKeySplit(walrusBlobId, share1, encrypted.iv, claimId, token)
 
       setSecretLink(secretUrl)
       setState("success")
@@ -108,13 +119,22 @@ export default function CreatePage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const copyBlobId = async () => {
+    await navigator.clipboard.writeText(blobId)
+    setBlobIdCopied(true)
+    setTimeout(() => setBlobIdCopied(false), 2000)
+  }
+
   const resetForm = () => {
     setState("input")
     setSecret("")
     setSelectedFile(null)
     setSecretLink("")
+    setBlobId("")
     setError("")
     setCopied(false)
+    setBlobIdCopied(false)
+    setMaxRecipients(1)
   }
 
   const handleFileSelected = (file: File) => {
@@ -171,29 +191,61 @@ export default function CreatePage() {
                 </div>
                 <h1 className="text-2xl font-medium mb-2 text-foreground">Link created</h1>
                 <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-                  Your {contentType === "text" ? "secret" : "file"} is encrypted and ready to share. The link will self-destruct after one use.
+                  Your {contentType === "text" ? "secret" : "file"} is encrypted and ready to share. The link can be accessed by up to {maxRecipients} {maxRecipients === 1 ? "person" : "people"}.
                 </p>
               </div>
 
               <div className="space-y-4">
                 <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">Your Secret Link</label>
                   <div className="flex gap-2">
-                    <div className="flex-1 p-3 bg-muted/50 rounded-lg font-mono text-xs break-all text-foreground border border-border">
+                    <div className="flex-1 p-4 bg-primary/5 border-2 border-primary/20 rounded-lg font-mono text-sm break-all text-foreground shadow-sm">
                       {secretLink}
                     </div>
                     <Button onClick={copyLink} size="sm" variant="outline" className="px-3 shrink-0 bg-transparent">
                       {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
-                  {copied && <p className="text-xs text-muted-foreground mt-2">Copied to clipboard</p>}
+                  {copied && <p className="text-xs text-green-600 dark:text-green-400 mt-2 font-medium">✓ Link copied to clipboard</p>}
                 </div>
+
+                {/* Walrus Storage Details */}
+                {blobId && (
+                <div className="bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Database className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      Stored on Walrus Network
+                    </span>
+                  </div>
+                  <div className="bg-blue-100/70 dark:bg-blue-900/30 rounded-md p-2 mb-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-mono text-blue-800 dark:text-blue-200 break-all flex-1">
+                        Blob ID: {blobId}
+                      </span>
+                      <Button
+                        onClick={copyBlobId}
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800"
+                      >
+                        {blobIdCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      </Button>
+                    </div>
+                    {blobIdCopied && <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">✓ Blob ID copied!</p>}
+                  </div>
+                </div>
+                )}
 
                 <div className="bg-muted/30 border border-border rounded-lg p-4">
                   <div className="flex items-start space-x-3">
                     <Shield className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
                     <div>
                       <p className="text-sm text-muted-foreground">
-                        This link can only be opened once. After viewing, it will be permanently destroyed.
+                        {maxRecipients === 1 
+                          ? "This link can only be opened once. After viewing, it will be permanently destroyed."
+                          : `This link can be opened by up to ${maxRecipients} people. After all views are used, it will be permanently destroyed.`
+                        }
                       </p>
                     </div>
                   </div>
@@ -270,6 +322,36 @@ export default function CreatePage() {
               </button>
             </div>
 
+            {/* Recipients Selector */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Users className="w-4 h-4" />
+                <span>Number of recipients</span>
+              </div>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setMaxRecipients(num)}
+                    className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors border ${
+                      maxRecipients === num
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-muted-foreground border-border hover:text-foreground hover:border-ring"
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {maxRecipients === 1 
+                  ? "Secret can be viewed once (original one-time behavior)"
+                  : `Secret can be viewed by up to ${maxRecipients} different people`
+                }
+              </p>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-6">
               {contentType === "text" ? (
                 <div className="space-y-2">
@@ -281,13 +363,6 @@ export default function CreatePage() {
                     className="min-h-[140px] resize-none border-border focus:border-ring transition-colors bg-background text-sm"
                   />
                   <div className="flex justify-between items-center text-xs">
-                    <span className="text-muted-foreground flex items-center gap-1.5">
-                      <Shield className="w-3 h-3" />
-                      Encrypted locally
-                    </span>
-                    <span className={`${secret.length > 9000 ? "text-destructive" : "text-muted-foreground"}`}>
-                      {secret.length}/10,000
-                    </span>
                   </div>
                 </div>
               ) : (
