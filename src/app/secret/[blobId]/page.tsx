@@ -7,19 +7,28 @@ import { useParams } from "next/navigation"
 import { motion } from "framer-motion"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Copy, Check, Lock, Shield, AlertTriangle } from "lucide-react"
-import { decryptSecret, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from "../../lib/crypto"
+import { ArrowLeft, Copy, Check, Lock, Shield, AlertTriangle, Download, File } from "lucide-react"
+import { isEncryptedFile, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from "../../lib/crypto"
 import { retrieveSecret, burnSecret } from "../../lib/walrus"
 
 type ViewState = "ready" | "retrieving" | "decrypting" | "success" | "burned" | "error"
+type ContentType = "text" | "file"
 
 export default function SecretPage() {
   const params = useParams()
   const [state, setState] = useState<ViewState>("ready")
   const [secret, setSecret] = useState("")
+  const [fileData, setFileData] = useState<{
+    data: ArrayBuffer
+    filename: string
+    type: string
+    size: number
+  } | null>(null)
+  const [contentType, setContentType] = useState<ContentType>("text")
   const [error, setError] = useState("")
   const [progress, setProgress] = useState("")
   const [copied, setCopied] = useState(false)
+  const [autoDownloadTriggered, setAutoDownloadTriggered] = useState(false)
   const [parsed, setParsed] = useState<{
     blobId: string
     key?: ArrayBuffer
@@ -58,12 +67,12 @@ export default function SecretPage() {
     if (!parsed) return
     try {
       setState("retrieving")
-      setProgress("Retrieving encrypted secret...")
+      setProgress("Retrieving encrypted content...")
 
       const encryptedData = await retrieveSecret(parsed.blobId)
 
       setState("decrypting")
-      setProgress("Decrypting secret...")
+      setProgress("Decrypting content...")
 
       const storedIv = new Uint8Array(encryptedData.slice(0, 12))
       const ciphertext = encryptedData.slice(12)
@@ -113,12 +122,69 @@ export default function SecretPage() {
         fullKey = combined.buffer as ArrayBuffer
       }
 
-      const decryptedSecret = await decryptSecret(ciphertext, fullKey, parsed.iv)
+      // Decrypt once, then detect content type from decrypted bytes
+      setProgress("Analyzing content...")
+
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        fullKey,
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"]
+      )
+
+      const decryptedData = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: new Uint8Array(parsed.iv) },
+        cryptoKey,
+        ciphertext as ArrayBuffer
+      )
+
+      const looksLikeFile = isEncryptedFile(decryptedData as ArrayBuffer)
+      setContentType(looksLikeFile ? "file" : "text")
+
+      if (looksLikeFile) {
+        setProgress("Preparing download...")
+        const decryptedArray = new Uint8Array(decryptedData)
+        const metadataLength = new DataView(decryptedArray.buffer, 0, 4).getUint32(0, true)
+        const metadataBytes = decryptedArray.slice(4, 4 + metadataLength)
+        const metadata = JSON.parse(new TextDecoder().decode(metadataBytes)) as {
+          filename: string
+          type: string
+          size: number
+        }
+        const fileBytes = decryptedArray.slice(4 + metadataLength)
+
+        const decryptedFileData = {
+          data: fileBytes.buffer,
+          filename: metadata.filename,
+          type: metadata.type,
+          size: metadata.size
+        }
+
+        setFileData(decryptedFileData)
+
+        // Automatically trigger download for files
+        setTimeout(() => {
+          const blob = new Blob([decryptedFileData.data], { type: decryptedFileData.type })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = decryptedFileData.filename
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+          setAutoDownloadTriggered(true)
+        }, 100) // Small delay to ensure UI updates first
+      } else {
+        // Treat as text secret
+        const text = new TextDecoder().decode(decryptedData)
+        setSecret(text)
+      }
 
       setProgress("Burning secret from storage...")
       await burnSecret(parsed.blobId)
 
-      setSecret(decryptedSecret)
       setState("success")
     } catch (err) {
       console.error("Failed to reveal secret:", err)
@@ -147,6 +213,38 @@ export default function SecretPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const downloadFile = () => {
+    if (!fileData) return
+    
+    const blob = new Blob([fileData.data], { type: fileData.type })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileData.filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  const getFileIcon = (type: string) => {
+    if (type.startsWith('image/')) return '🖼️'
+    if (type.startsWith('video/')) return '🎥'
+    if (type.startsWith('audio/')) return '🎵'
+    if (type.includes('pdf')) return '📄'
+    if (type.includes('zip') || type.includes('rar') || type.includes('7z')) return '🗜️'
+    if (type.includes('text/') || type.includes('json')) return '📝'
+    return '📄'
+  }
+
   if (state === "retrieving" || state === "decrypting") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center px-4">
@@ -158,7 +256,7 @@ export default function SecretPage() {
         >
           <div className="w-6 h-6 border-2 border-muted border-t-foreground rounded-full animate-spin mx-auto mb-6"></div>
           <h2 className="text-xl font-medium mb-4 text-foreground">
-            {state === "retrieving" ? "Retrieving secret" : "Decrypting secret"}
+            {state === "retrieving" ? "Retrieving content" : "Decrypting content"}
           </h2>
           <p className="text-sm text-muted-foreground">{progress}</p>
         </motion.div>
@@ -185,14 +283,14 @@ export default function SecretPage() {
                 <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
                   <Lock className="w-5 h-5 text-primary-foreground" />
                 </div>
-                <h1 className="text-2xl font-medium mb-2 text-foreground">Reveal secret</h1>
+                <h1 className="text-2xl font-medium mb-2 text-foreground">Reveal content</h1>
                 <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-                  This link contains a one-time secret. After viewing, it will be permanently destroyed.
+                  This link contains encrypted content. After viewing, it will be permanently destroyed.
                 </p>
               </div>
 
               <Button onClick={handleReveal} disabled={!parsed} className="w-full">
-                Reveal secret
+                Reveal content
               </Button>
             </div>
           </motion.div>
@@ -220,29 +318,64 @@ export default function SecretPage() {
                 <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
                   <Shield className="w-5 h-5 text-primary-foreground" />
                 </div>
-                <h1 className="text-2xl font-medium mb-2 text-foreground">Secret revealed</h1>
+                <h1 className="text-2xl font-medium mb-2 text-foreground">
+                  {contentType === "file" ? "File ready" : "Secret revealed"}
+                </h1>
                 <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-                  The secret has been decrypted and permanently removed from storage.
+                  {contentType === "file" 
+                    ? "Your file has been decrypted and should start downloading automatically. It has been permanently removed from storage."
+                    : "The secret has been decrypted and permanently removed from storage."}
                 </p>
               </div>
 
               <div className="space-y-4">
-                <div>
-                  <div className="relative">
-                    <div className="p-3 bg-muted/50 rounded-lg font-mono text-sm whitespace-pre-wrap text-foreground border border-border">
-                      {secret}
+                {contentType === "text" ? (
+                  <div>
+                    <div className="relative">
+                      <div className="p-3 bg-muted/50 rounded-lg font-mono text-sm whitespace-pre-wrap text-foreground border border-border">
+                        {secret}
+                      </div>
+                      <Button
+                        onClick={copySecret}
+                        size="sm"
+                        variant="outline"
+                        className="absolute top-2 right-2 bg-transparent"
+                      >
+                        {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </Button>
                     </div>
-                    <Button
-                      onClick={copySecret}
-                      size="sm"
-                      variant="outline"
-                      className="absolute top-2 right-2 bg-transparent"
-                    >
-                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    </Button>
+                    {copied && <p className="text-xs text-muted-foreground mt-2">Copied to clipboard</p>}
                   </div>
-                  {copied && <p className="text-xs text-muted-foreground mt-2">Copied to clipboard</p>}
-                </div>
+                ) : fileData ? (
+                  <div className="space-y-4">
+                    <div className="bg-muted/30 border border-border rounded-lg p-6 text-center">
+                      <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <File className="w-8 h-8 text-primary" />
+                      </div>
+                      <div className="space-y-2 mb-4">
+                        <div className="flex items-center justify-center gap-2 text-lg font-medium">
+                          <span className="text-2xl">{getFileIcon(fileData.type)}</span>
+                          <span className="text-foreground">{fileData.filename}</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {formatFileSize(fileData.size)} • {fileData.type || 'Unknown type'}
+                        </p>
+                      </div>
+                      <Button onClick={downloadFile} className="w-full" variant="outline">
+                        <Download className="w-4 h-4 mr-2" />
+                        Download Again
+                      </Button>
+                      {autoDownloadTriggered && (
+                        <p className="text-xs text-green-600 dark:text-green-400 mt-2">
+                          ✓ Download started automatically
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {autoDownloadTriggered ? "Need to download again?" : "Download didn't start? Click the button above."}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="flex gap-3 pt-2">
                   <Link href="/create" className="flex-1">

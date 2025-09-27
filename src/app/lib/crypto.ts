@@ -9,6 +9,15 @@ export interface EncryptedData {
   key: ArrayBuffer
 }
 
+export interface EncryptedFile {
+  ciphertext: ArrayBuffer
+  iv: Uint8Array
+  key: ArrayBuffer
+  filename: string
+  type: string
+  size: number
+}
+
 export interface SecretPackage {
   blobId: string
   key: string // base64 encoded key
@@ -208,5 +217,120 @@ export function parseSecretUrl(url: string): {
   } catch (error) {
     console.error('Failed to parse secret URL:', error)
     return null
+  }
+}
+
+/**
+ * Encrypt a file using AES-GCM
+ */
+export async function encryptFile(file: File): Promise<EncryptedFile> {
+  // Generate a random AES-GCM key
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true, // extractable
+    ["encrypt", "decrypt"]
+  )
+
+  // Generate a random IV (initialization vector)
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+
+  // Read file as ArrayBuffer
+  const fileData = await file.arrayBuffer()
+
+  // Create metadata header with file info
+  const metadata = {
+    filename: file.name,
+    type: file.type,
+    size: file.size,
+    timestamp: Date.now()
+  }
+  const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata))
+  const metadataLength = new Uint8Array(4)
+  new DataView(metadataLength.buffer).setUint32(0, metadataBytes.length, true)
+
+  // Combine metadata and file data
+  const combinedData = new Uint8Array(4 + metadataBytes.length + fileData.byteLength)
+  combinedData.set(metadataLength, 0)
+  combinedData.set(metadataBytes, 4)
+  combinedData.set(new Uint8Array(fileData as ArrayBuffer), 4 + metadataBytes.length)
+
+  // Encrypt the combined data
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    combinedData
+  )
+
+  // Export the key for storage/transmission
+  const exportedKey = await crypto.subtle.exportKey("raw", key)
+
+  return {
+    ciphertext,
+    iv,
+    key: exportedKey,
+    filename: file.name,
+    type: file.type,
+    size: file.size
+  }
+}
+
+/**
+ * Decrypt a file using AES-GCM
+ */
+export async function decryptFile(
+  ciphertext: ArrayBuffer,
+  keyData: ArrayBuffer,
+  iv: Uint8Array
+): Promise<{ data: ArrayBuffer; filename: string; type: string; size: number }> {
+  // Import the key
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyData,
+    { name: "AES-GCM" },
+    false, // not extractable
+    ["decrypt"]
+  )
+
+  // Decrypt the data
+  const decryptedData = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    ciphertext as ArrayBuffer
+  )
+
+  // Extract metadata
+  const decryptedArray = new Uint8Array(decryptedData)
+  const metadataLength = new DataView(decryptedArray.buffer, 0, 4).getUint32(0, true)
+  const metadataBytes = decryptedArray.slice(4, 4 + metadataLength)
+  const metadata = JSON.parse(new TextDecoder().decode(metadataBytes))
+  
+  // Extract file data
+  const fileData = decryptedArray.slice(4 + metadataLength)
+
+  return {
+    data: fileData.buffer,
+    filename: metadata.filename,
+    type: metadata.type,
+    size: metadata.size
+  }
+}
+
+/**
+ * Check if the encrypted data contains a file (vs text secret)
+ */
+export function isEncryptedFile(data: ArrayBuffer): boolean {
+  if (data.byteLength < 4) return false
+  
+  try {
+    const metadataLength = new DataView(data.slice(0, 4)).getUint32(0, true)
+    if (metadataLength > data.byteLength - 4 || metadataLength <= 0) return false
+    
+    const metadataBytes = new Uint8Array(data.slice(4, 4 + metadataLength))
+    const metadataStr = new TextDecoder().decode(metadataBytes)
+    const metadata = JSON.parse(metadataStr)
+    
+    return typeof metadata.filename === 'string' && typeof metadata.type === 'string'
+  } catch {
+    return false
   }
 }

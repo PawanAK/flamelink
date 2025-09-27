@@ -27,6 +27,13 @@ export interface StoredSecret {
   size: number
 }
 
+export interface StoredFile {
+  blobId: string
+  size: number
+  filename: string
+  type: string
+}
+
 const BURNED_MARKER = 'FLAMELINK_BURNED'
 
 /**
@@ -173,6 +180,139 @@ export async function burnSecret(blobId: string): Promise<void> {
     console.warn('⚠️ Failed to burn secret marker:', error)
     // Don't throw error - burning is best-effort
   }
+}
+
+/**
+ * Store an encrypted file on Walrus with enhanced file handling
+ */
+export async function storeFile(
+  encryptedData: ArrayBuffer, 
+  filename: string, 
+  type: string,
+  onProgress?: (progress: number) => void
+): Promise<StoredFile> {
+  const url = `${WALRUS_PUBLISHER}/v1/blobs?deletable=true&epochs=1`
+  console.log('🔄 Storing file on Walrus:', {
+    url,
+    filename,
+    type,
+    dataSize: encryptedData.byteLength,
+    timestamp: new Date().toISOString()
+  })
+
+  try {
+    // For now, we'll use the same fetch approach as secrets
+    // In the future, we could add chunked upload for large files
+    const response = await fetch(url, {
+      method: 'PUT',
+      body: encryptedData,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+      },
+    })
+
+    console.log('📡 Walrus file upload response:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries())
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unable to read error response')
+      console.error('❌ Walrus file upload failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      })
+      throw new Error(`File upload failed: ${response.status} ${response.statusText}. ${errorText}`)
+    }
+
+    const result: WalrusStoreResponse = await response.json()
+    console.log('✅ Walrus file upload success:', result)
+    
+    let blobId: string
+    let size: number
+
+    if (result.newlyCreated) {
+      blobId = result.newlyCreated.blobObject.blobId
+      size = result.newlyCreated.blobObject.size
+    } else if (result.alreadyCertified) {
+      blobId = result.alreadyCertified.blobId
+      size = encryptedData.byteLength
+    } else {
+      console.error('❌ Unexpected Walrus response format:', result)
+      throw new Error('Unexpected Walrus response format')
+    }
+
+    onProgress?.(100) // Mark as complete
+    console.log('🎉 File stored successfully:', { blobId, size, filename, type })
+    return { blobId, size, filename, type }
+  } catch (error) {
+    console.error('💥 Failed to store file on Walrus:', error)
+    if (error instanceof Error) {
+      throw error
+    }
+    throw new Error('Failed to store file. Please try again.')
+  }
+}
+
+/**
+ * Retrieve a file from Walrus
+ */
+export async function retrieveFile(blobId: string): Promise<ArrayBuffer> {
+  const url = `${WALRUS_AGGREGATOR}/v1/blobs/${blobId}`
+  console.log('📥 Retrieving file from Walrus:', { blobId, url })
+
+  try {
+    const response = await fetch(url)
+
+    console.log('📡 File retrieval response:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries())
+    })
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.log('❌ File not found (404) - likely burned or invalid')
+        throw new Error('File not found or has been burned')
+      }
+      console.error('❌ Failed to retrieve file:', {
+        status: response.status,
+        statusText: response.statusText
+      })
+      throw new Error(`Failed to retrieve file: ${response.status} ${response.statusText}`)
+    }
+
+    const data = await response.arrayBuffer()
+    console.log('📦 Retrieved file data size:', data.byteLength)
+    
+    // Check if the file has been burned
+    const text = new TextDecoder().decode(data)
+    if (text === BURNED_MARKER) {
+      console.log('🔥 File was already burned')
+      throw new Error('File has been burned')
+    }
+
+    console.log('✅ File retrieved successfully')
+    return data
+  } catch (error) {
+    console.error('💥 Failed to retrieve file:', error)
+    if (error instanceof Error) {
+      throw error
+    }
+    throw new Error('Failed to retrieve file')
+  }
+}
+
+/**
+ * Get file size estimate for upload
+ */
+export function estimateUploadSize(file: File): number {
+  // Account for encryption overhead (AES-GCM adds ~16 bytes per block + IV + metadata)
+  const metadataSize = 200 // Rough estimate for JSON metadata
+  const encryptionOverhead = 32 // IV + authentication tag
+  return file.size + metadataSize + encryptionOverhead
 }
 
 /**

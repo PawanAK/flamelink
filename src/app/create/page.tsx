@@ -7,15 +7,19 @@ import { motion } from "framer-motion"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, Copy, Check, Lock, Shield } from "lucide-react"
-import { encryptSecret, splitKeyXor, arrayBufferToBase64Url, generateSecretUrlKeySplit } from "../lib/crypto"
-import { storeSecret } from "../lib/walrus"
+import { ArrowLeft, Copy, Check, Lock, Shield, FileText, Upload } from "lucide-react"
+import { encryptSecret, encryptFile, splitKeyXor, arrayBufferToBase64Url, generateSecretUrlKeySplit } from "../lib/crypto"
+import { storeSecret, storeFile } from "../lib/walrus"
+import FileUpload from "../components/FileUpload"
 
 type CreateState = "input" | "generating" | "success"
+type ContentType = "text" | "file"
 
 export default function CreatePage() {
   const [state, setState] = useState<CreateState>("input")
+  const [contentType, setContentType] = useState<ContentType>("text")
   const [secret, setSecret] = useState("")
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [secretLink, setSecretLink] = useState("")
   const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
@@ -23,30 +27,54 @@ export default function CreatePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!secret.trim()) {
-      setError("Please enter a secret to share")
-      return
-    }
-
-    if (secret.length > 10000) {
-      setError("Secret is too long. Please keep it under 10,000 characters.")
-      return
+    // Validate input based on content type
+    if (contentType === "text") {
+      if (!secret.trim()) {
+        setError("Please enter a secret to share")
+        return
+      }
+      if (secret.length > 10000) {
+        setError("Secret is too long. Please keep it under 10,000 characters.")
+        return
+      }
+    } else {
+      if (!selectedFile) {
+        setError("Please select a file to share")
+        return
+      }
+      if (selectedFile.size > 50 * 1024 * 1024) { // 50MB limit
+        setError("File is too large. Please keep it under 50MB.")
+        return
+      }
     }
 
     setState("generating")
     setError("")
 
     try {
-      // Step 1: Encrypt the secret client-side
-      const encrypted = await encryptSecret(secret)
+      let encrypted: { ciphertext: ArrayBuffer; iv: Uint8Array; key: ArrayBuffer }
+      let combinedData: Uint8Array
 
-      // Step 2: Combine encrypted data with IV for storage
-      const combinedData = new Uint8Array(encrypted.iv.length + encrypted.ciphertext.byteLength)
-      combinedData.set(encrypted.iv, 0)
-      combinedData.set(new Uint8Array(encrypted.ciphertext), encrypted.iv.length)
+      if (contentType === "text") {
+        // Step 1: Encrypt the text secret client-side
+        encrypted = await encryptSecret(secret)
+
+        // Step 2: Combine encrypted data with IV for storage
+        combinedData = new Uint8Array(encrypted.iv.length + encrypted.ciphertext.byteLength)
+        combinedData.set(encrypted.iv, 0)
+        combinedData.set(new Uint8Array(encrypted.ciphertext), encrypted.iv.length)
+      } else {
+        // Step 1: Encrypt the file client-side
+        encrypted = await encryptFile(selectedFile!)
+
+        // Step 2: Combine encrypted data with IV for storage
+        combinedData = new Uint8Array(encrypted.iv.length + encrypted.ciphertext.byteLength)
+        combinedData.set(encrypted.iv, 0)
+        combinedData.set(new Uint8Array(encrypted.ciphertext), encrypted.iv.length)
+      }
 
       // Step 3: Store on Walrus
-      const { blobId } = await storeSecret(combinedData.buffer)
+      const { blobId } = await storeSecret(combinedData.buffer as ArrayBuffer)
 
       // Step 4: Split key and initialize one-time claim gate
       const { share1, share2 } = splitKeyXor(encrypted.key)
@@ -83,9 +111,22 @@ export default function CreatePage() {
   const resetForm = () => {
     setState("input")
     setSecret("")
+    setSelectedFile(null)
     setSecretLink("")
     setError("")
     setCopied(false)
+  }
+
+  const handleFileSelected = (file: File) => {
+    setSelectedFile(file)
+    setError("") // Clear any existing errors
+  }
+
+  const switchContentType = (type: ContentType) => {
+    setContentType(type)
+    setSecret("")
+    setSelectedFile(null)
+    setError("")
   }
 
   if (state === "generating") {
@@ -99,7 +140,11 @@ export default function CreatePage() {
         >
           <div className="w-6 h-6 border-2 border-muted border-t-foreground rounded-full animate-spin mx-auto mb-6"></div>
           <h2 className="text-xl font-medium mb-4 text-foreground">Creating secure link</h2>
-          <p className="text-sm text-muted-foreground">Encrypting and storing your secret...</p>
+          <p className="text-sm text-muted-foreground">
+            {contentType === "text" 
+              ? "Encrypting and storing your secret..." 
+              : "Encrypting and uploading your file..."}
+          </p>
         </motion.div>
       </div>
     )
@@ -126,7 +171,7 @@ export default function CreatePage() {
                 </div>
                 <h1 className="text-2xl font-medium mb-2 text-foreground">Link created</h1>
                 <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-                  Your secret is encrypted and ready to share. The link will self-destruct after one use.
+                  Your {contentType === "text" ? "secret" : "file"} is encrypted and ready to share. The link will self-destruct after one use.
                 </p>
               </div>
 
@@ -191,31 +236,67 @@ export default function CreatePage() {
               <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
                 <Lock className="w-5 h-5 text-primary-foreground" />
               </div>
-              <h1 className="text-2xl font-medium mb-2 text-foreground">Share a secret</h1>
+              <h1 className="text-2xl font-medium mb-2 text-foreground">Share securely</h1>
               <p className="text-muted-foreground text-sm max-w-sm mx-auto">
                 Send sensitive information with end-to-end encryption and automatic destruction.
               </p>
             </div>
 
+            {/* Content Type Tabs */}
+            <div className="flex bg-muted rounded-lg p-1">
+              <button
+                type="button"
+                onClick={() => switchContentType("text")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  contentType === "text"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Text Secret
+              </button>
+              <button
+                type="button"
+                onClick={() => switchContentType("file")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  contentType === "file"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Upload className="w-4 h-4" />
+                File Upload
+              </button>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-6">
-              <div className="space-y-2">
-                <Textarea
-                  id="secret"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  placeholder="Enter your secret here..."
-                  className="min-h-[140px] resize-none border-border focus:border-ring transition-colors bg-background text-sm"
-                />
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-muted-foreground flex items-center gap-1.5">
-                    <Shield className="w-3 h-3" />
-                    Encrypted locally
-                  </span>
-                  <span className={`${secret.length > 9000 ? "text-destructive" : "text-muted-foreground"}`}>
-                    {secret.length}/10,000
-                  </span>
+              {contentType === "text" ? (
+                <div className="space-y-2">
+                  <Textarea
+                    id="secret"
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    placeholder="Enter your secret here..."
+                    className="min-h-[140px] resize-none border-border focus:border-ring transition-colors bg-background text-sm"
+                  />
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-muted-foreground flex items-center gap-1.5">
+                      <Shield className="w-3 h-3" />
+                      Encrypted locally
+                    </span>
+                    <span className={`${secret.length > 9000 ? "text-destructive" : "text-muted-foreground"}`}>
+                      {secret.length}/10,000
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <FileUpload 
+                  onFileSelected={handleFileSelected}
+                  maxSizeBytes={50 * 1024 * 1024} // 50MB
+                  disabled={state !== "input"}
+                />
+              )}
 
               {error && (
                 <div className="bg-destructive/10 border border-destructive/20 text-destructive px-3 py-2 rounded-lg text-sm">
@@ -223,7 +304,13 @@ export default function CreatePage() {
                 </div>
               )}
 
-              <Button type="submit" disabled={!secret.trim()} className="w-full">
+              <Button 
+                type="submit" 
+                disabled={
+                  contentType === "text" ? !secret.trim() : !selectedFile
+                } 
+                className="w-full"
+              >
                 Create secure link
               </Button>
             </form>
