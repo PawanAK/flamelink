@@ -14,21 +14,17 @@ FlameLink provides mathematical guarantees: client‑side encryption, decentrali
 
 ## 🧠 How it works (high‑level)
 
-```mermaid
-graph TB
-    A[Create secret] --> B[Encrypt in browser (AES‑256‑GCM)]
-    B --> C[Split key: K = K1 ⊕ K2]
-    C --> D[Store ciphertext on Walrus]
-    C --> E[Store K2 in claim gate]
-    D --> F[Generate one‑time link]
-    E --> F
-    F --> G[Recipient opens link]
-    G --> H[Claim K2 once]
-    H --> I[Reconstruct key + decrypt client‑side]
-    I --> J[Secret burned forever]
-
-    style D fill:#66ccff
-    style E fill:#ffcc66
+```
+Create secret
+  -> Encrypt in browser (AES‑256‑GCM)
+  -> Split key: K = K1 XOR K2
+  -> Store ciphertext on Walrus
+  -> Store K2 in claim gate
+  -> Generate one‑time link
+Recipient opens link
+  -> Claim K2 once
+  -> Reconstruct key (K1 XOR K2) and decrypt client‑side
+  -> Secret burned forever (uses decremented until 0)
 ```
 
 ### URL format
@@ -40,60 +36,40 @@ graph TB
 
 ## 🔬 Detailed flow
 
-```mermaid
-sequenceDiagram
-    participant U as Creator
-    participant FE as Browser
-    participant API as Claim API
-    participant W as Walrus
-    participant R as Recipient
+```
+Creator -> Browser: enter secret
+Browser: encrypt (AES‑256‑GCM)
+Browser: split key (K1, K2)
+Browser -> Walrus: PUT [IV|ciphertext] => blobId
+Browser -> Claim API: POST /api/claim/init {K2, ttl, maxUses} => {claimId, token}
+Browser -> Creator: share /secret/{blobId}#K1.IV.claimId.token
 
-    U->>FE: Enter secret
-    FE->>FE: AES‑256‑GCM encrypt
-    FE->>FE: Split key K = K1 ⊕ K2
-    FE->>W: PUT [IV|ciphertext]
-    W-->>FE: blobId
-    FE->>API: POST /api/claim/init {K2, ttl, maxUses}
-    API-->>FE: claimId, token
-    FE->>U: Share link /secret/{blobId}#K1.IV.claimId.token
-
-    U->>R: Send link
-    R->>FE: Open link
-    FE->>API: POST /api/claim {claimId, token}
-    API-->>FE: K2 (once or up to maxUses)
-    FE->>W: GET /v1/blobs/{blobId}
-    W-->>FE: [IV|ciphertext]
-    FE->>FE: Reconstruct K and decrypt
-    FE-->>R: Show secret; display uses remaining
+Recipient -> Browser: open link
+Browser -> Claim API: POST /api/claim {claimId, token} => K2 (once/up to maxUses)
+Browser -> Walrus: GET /v1/blobs/{blobId} => [IV|ciphertext]
+Browser: reconstruct key + decrypt; show secret; show uses remaining
 ```
 
 ## 🧩 Architecture
 
-```mermaid
-graph TB
-  subgraph App
-    UI[React UI]
-    CRYPTO[crypto.ts]
-    WALRUS[walrus.ts]
-    API[/api/claim, /api/claim/init]
-  end
+```
+[App]
+  - React UI
+  - crypto.ts
+  - walrus.ts
+  - /api/claim, /api/claim/init
 
-  subgraph Walrus Network
-    PUB[Publisher]
-    AGG[Aggregator]
-    STORE[Distributed Storage]
-  end
+[Walrus Network]
+  - Publisher
+  - Aggregator
+  - Distributed Storage
 
-  UI --> CRYPTO
-  UI --> WALRUS
-  UI --> API
-  CRYPTO --> UI
-  WALRUS --> PUB
-  AGG --> UI
-
-  style API fill:#ffcc66
-  style STORE fill:#66ccff
-  style CRYPTO fill:#99ff99
+Flows:
+  UI <-> crypto.ts
+  UI <-> walrus.ts
+  UI <-> API
+  walrus.ts -> Publisher (store)
+  Aggregator -> UI (retrieve)
 ```
 
 ### Walrus endpoints (currently configured)
