@@ -1,75 +1,76 @@
-'use client'
+"use client"
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
-import { motion } from 'framer-motion'
-import Link from 'next/link'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Shield, Eye, AlertTriangle, Copy, Check, ArrowLeft, Flame } from 'lucide-react'
-import { decryptSecret, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from '../../lib/crypto'
-import { retrieveSecret, burnSecret } from '../../lib/walrus'
+import type React from "react"
 
-type ViewState = 'ready' | 'retrieving' | 'decrypting' | 'success' | 'burned' | 'error'
+import { useEffect, useState } from "react"
+import { useParams } from "next/navigation"
+import { motion } from "framer-motion"
+import Link from "next/link"
+import { Button } from "@/components/ui/button"
+import { ArrowLeft, Copy, Check, Lock, Shield, AlertTriangle } from "lucide-react"
+import { decryptSecret, parseSecretUrl, xorShares, base64UrlToArrayBuffer } from "../../lib/crypto"
+import { retrieveSecret, burnSecret } from "../../lib/walrus"
+
+type ViewState = "ready" | "retrieving" | "decrypting" | "success" | "burned" | "error"
 
 export default function SecretPage() {
   const params = useParams()
-  const [state, setState] = useState<ViewState>('ready')
-  const [secret, setSecret] = useState('')
-  const [error, setError] = useState('')
-  const [progress, setProgress] = useState('')
+  const [state, setState] = useState<ViewState>("ready")
+  const [secret, setSecret] = useState("")
+  const [error, setError] = useState("")
+  const [progress, setProgress] = useState("")
   const [copied, setCopied] = useState(false)
   const [parsed, setParsed] = useState<{
-    blobId: string;
-    key?: ArrayBuffer;
-    iv: Uint8Array;
-    keyShare1?: Uint8Array;
-    claimId?: string;
-    token?: string;
+    blobId: string
+    key?: ArrayBuffer
+    iv: Uint8Array
+    keyShare1?: Uint8Array
+    claimId?: string
+    token?: string
   } | null>(null)
 
   useEffect(() => {
     try {
       const currentUrl = window.location.href
       const parsedUrl = parseSecretUrl(currentUrl)
-      
+
       if (!parsedUrl) {
-        setError('Invalid secret link format')
-        setState('error')
+        setError("Invalid secret link format")
+        setState("error")
         return
       }
 
       if (parsedUrl.blobId !== params.blobId) {
-        setError('Mismatched secret parameters')
-        setState('error')
+        setError("Mismatched secret parameters")
+        setState("error")
         return
       }
 
       setParsed(parsedUrl)
-      setState('ready')
+      setState("ready")
     } catch (err) {
-      setError('Invalid link')
-      setState('error')
+      setError("Invalid link")
+      setState("error")
     }
   }, [params.blobId])
 
   const handleReveal = async () => {
     if (!parsed) return
     try {
-      setState('retrieving')
-      setProgress('Connecting to Walrus network...')
+      setState("retrieving")
+      setProgress("Retrieving encrypted secret...")
 
       const encryptedData = await retrieveSecret(parsed.blobId)
 
-      setState('decrypting')
-      setProgress('Decrypting secret...')
+      setState("decrypting")
+      setProgress("Decrypting secret...")
 
       const storedIv = new Uint8Array(encryptedData.slice(0, 12))
       const ciphertext = encryptedData.slice(12)
 
       if (storedIv.length !== parsed.iv.length || !storedIv.every((val, i) => val === parsed.iv[i])) {
-        setError('Invalid encryption parameters')
-        setState('error')
+        setError("Invalid encryption parameters")
+        setState("error")
         return
       }
 
@@ -78,48 +79,66 @@ export default function SecretPage() {
         fullKey = parsed.key
       } else {
         // Claim the second key share once
-        const res = await fetch('/api/claim', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claimId: parsed.claimId, token: parsed.token })
+        const res = await fetch("/api/claim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ claimId: parsed.claimId, token: parsed.token }),
         })
         if (!res.ok) {
-          throw new Error(await res.text().catch(() => 'Claim failed'))
+          const errorText = await res.text().catch(() => "Claim failed")
+          let errorMessage = "Claim failed"
+
+          try {
+            const errorData = JSON.parse(errorText)
+            if (errorData.error) {
+              if (errorData.error === "Already claimed" || errorData.error.includes("Already claimed")) {
+                errorMessage = "This secret has already been accessed and destroyed"
+              } else {
+                errorMessage = errorData.error
+              }
+            }
+          } catch {
+            if (errorText.includes("Already claimed")) {
+              errorMessage = "This secret has already been accessed and destroyed"
+            } else {
+              errorMessage = errorText
+            }
+          }
+
+          throw new Error(errorMessage)
         }
         const { share2B64Url } = await res.json()
         const share2 = new Uint8Array(base64UrlToArrayBuffer(share2B64Url))
         const combined = xorShares(parsed.keyShare1 as Uint8Array, share2)
-        fullKey = combined.buffer
+        fullKey = combined.buffer as ArrayBuffer
       }
 
       const decryptedSecret = await decryptSecret(ciphertext, fullKey, parsed.iv)
 
-      setProgress('Burning secret from storage...')
+      setProgress("Burning secret from storage...")
       await burnSecret(parsed.blobId)
 
       setSecret(decryptedSecret)
-      setState('success')
+      setState("success")
     } catch (err) {
-      console.error('Failed to reveal secret:', err)
+      console.error("Failed to reveal secret:", err)
       if (err instanceof Error) {
-        if (err.message.includes('burned') || err.message.includes('BURNED')) {
-          setState('burned')
-        } else if (err.message.includes('not found')) {
-          setError('Secret not found or has expired')
-          setState('error')
+        if (err.message.includes("burned") || err.message.includes("BURNED")) {
+          setState("burned")
+        } else if (err.message.includes("already been accessed") || err.message.includes("Already claimed")) {
+          setState("burned")
+        } else if (err.message.includes("not found")) {
+          setError("Secret not found or has expired")
+          setState("error")
         } else {
           setError(err.message)
-          setState('error')
+          setState("error")
         }
       } else {
-        setError('Failed to retrieve secret')
-        setState('error')
+        setError("Failed to retrieve secret")
+        setState("error")
       }
     }
-  }
-
-  const handleNewSecret = () => {
-    window.location.href = '/'
   }
 
   const copySecret = async () => {
@@ -128,221 +147,158 @@ export default function SecretPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  // Loading state
-  if (state === 'retrieving' || state === 'decrypting') {
+  if (state === "retrieving" || state === "decrypting") {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
+          initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.3 }}
-          className="text-center max-w-md mx-auto"
+          className="text-center max-w-sm"
         >
-          <div className="w-16 h-16 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-6"></div>
-          <h2 className="text-2xl font-bold mb-2">
-            {state === 'retrieving' ? 'Retrieving Secret' : 'Decrypting Secret'}
+          <div className="w-6 h-6 border-2 border-muted border-t-foreground rounded-full animate-spin mx-auto mb-6"></div>
+          <h2 className="text-xl font-medium mb-4 text-foreground">
+            {state === "retrieving" ? "Retrieving secret" : "Decrypting secret"}
           </h2>
-          <p className="text-muted-foreground mb-4">{progress}</p>
-          <div className="w-full bg-muted rounded-full h-2">
-            <motion.div 
-              className="bg-primary h-2 rounded-full"
-              initial={{ width: "0%" }}
-              animate={{ width: state === 'retrieving' ? '30%' : '80%' }}
-              transition={{ duration: 1 }}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground mt-4">
-            🛡️ Processing securely in your browser
-          </p>
+          <p className="text-sm text-muted-foreground">{progress}</p>
         </motion.div>
       </div>
     )
   }
 
-  // Ready state
-  if (state === 'ready') {
+  if (state === "ready") {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex items-center gap-4 mb-8">
+        <div className="container mx-auto px-4 py-8 max-w-xl">
+          <div className="mb-8">
             <Link href="/">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Home
+              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground -ml-2">
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                Back
               </Button>
             </Link>
           </div>
 
-          <div className="max-w-2xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <Card className="p-8 text-center">
-                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Eye className="w-8 h-8 text-primary" />
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+            <div className="space-y-8">
+              <div className="text-center">
+                <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Lock className="w-5 h-5 text-primary-foreground" />
                 </div>
-                <h1 className="text-3xl font-bold mb-4">One-Time Secret</h1>
-                <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
-                  This secret is encrypted and stored securely. It will be permanently destroyed after you reveal it.
+                <h1 className="text-2xl font-medium mb-2 text-foreground">Reveal secret</h1>
+                <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+                  This link contains a one-time secret. After viewing, it will be permanently destroyed.
                 </p>
-                
-                <Button onClick={handleReveal} size="lg" className="px-12 py-6 text-lg">
-                  <Eye className="w-5 h-5 mr-2" />
-                  Reveal Secret
-                </Button>
+              </div>
 
-                <div className="mt-8 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
-                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                    ⚠️ Warning: This link works only once. If multiple people have access, the first person to click will see the secret.
-                  </p>
-                </div>
-              </Card>
-            </motion.div>
-          </div>
+              <Button onClick={handleReveal} disabled={!parsed} className="w-full">
+                Reveal secret
+              </Button>
+            </div>
+          </motion.div>
         </div>
       </div>
     )
   }
 
-  // Success state
-  if (state === 'success') {
+  if (state === "success") {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex items-center gap-4 mb-8">
+        <div className="container mx-auto px-4 py-8 max-w-xl">
+          <div className="mb-8">
             <Link href="/">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Home
+              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground -ml-2">
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                Back
               </Button>
             </Link>
           </div>
 
-          <div className="max-w-2xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <Card className="p-8">
-                <div className="text-center mb-8">
-                  <div className="w-16 h-16 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Shield className="w-8 h-8 text-green-600 dark:text-green-400" />
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+            <div className="space-y-8">
+              <div className="text-center">
+                <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Shield className="w-5 h-5 text-primary-foreground" />
+                </div>
+                <h1 className="text-2xl font-medium mb-2 text-foreground">Secret revealed</h1>
+                <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+                  The secret has been decrypted and permanently removed from storage.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="relative">
+                    <div className="p-3 bg-muted/50 rounded-lg font-mono text-sm whitespace-pre-wrap text-foreground border border-border">
+                      {secret}
+                    </div>
+                    <Button
+                      onClick={copySecret}
+                      size="sm"
+                      variant="outline"
+                      className="absolute top-2 right-2 bg-transparent"
+                    >
+                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </Button>
                   </div>
-                  <h1 className="text-3xl font-bold mb-2">Secret Revealed</h1>
-                  <p className="text-muted-foreground">
-                    The secret has been successfully retrieved and permanently destroyed from storage.
-                  </p>
+                  {copied && <p className="text-xs text-muted-foreground mt-2">Copied to clipboard</p>}
                 </div>
 
-                <div className="space-y-6">
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">Your Secret</label>
-                    <div className="relative">
-                      <div className="p-4 bg-muted rounded-md font-mono text-sm whitespace-pre-wrap break-all min-h-[100px]">
-                        {secret}
-                      </div>
-                      <Button 
-                        onClick={copySecret} 
-                        size="sm" 
-                        className="absolute top-2 right-2"
-                        variant="secondary"
-                      >
-                        {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      </Button>
-                    </div>
-                    {copied && (
-                      <p className="text-sm text-green-600 dark:text-green-400 mt-2">✓ Copied to clipboard</p>
-                    )}
-                  </div>
-
-                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Flame className="w-5 h-5 text-red-600 dark:text-red-400" />
-                      <h3 className="font-semibold text-red-800 dark:text-red-200">Secret Burned Forever</h3>
-                    </div>
-                    <p className="text-sm text-red-700 dark:text-red-300">
-                      This secret has been permanently destroyed. Even the original sender cannot recover it. 
-                      Make sure to save it now if needed.
-                    </p>
-                  </div>
-
-                  <div className="flex gap-4">
-                    <Link href="/create" className="flex-1">
-                      <Button className="w-full">
-                        Create Your Own Secret
-                      </Button>
-                    </Link>
-                    <Link href="/" className="flex-1">
-                      <Button variant="outline" className="w-full">
-                        Back to Home
-                      </Button>
-                    </Link>
-                  </div>
+                <div className="flex gap-3 pt-2">
+                  <Link href="/create" className="flex-1">
+                    <Button className="w-full">Create your own secret</Button>
+                  </Link>
+                  <Link href="/" className="flex-1">
+                    <Button variant="outline" className="w-full bg-transparent">
+                      Home
+                    </Button>
+                  </Link>
                 </div>
-              </Card>
-            </motion.div>
-          </div>
+              </div>
+            </div>
+          </motion.div>
         </div>
       </div>
     )
   }
 
-  // Burned state
-  if (state === 'burned') {
+  if (state === "burned") {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex items-center gap-4 mb-8">
+        <div className="container mx-auto px-4 py-8 max-w-xl">
+          <div className="mb-8">
             <Link href="/">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Home
+              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground -ml-2">
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                Back
               </Button>
             </Link>
           </div>
 
-          <div className="max-w-2xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <Card className="p-8 text-center">
-                <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Flame className="w-8 h-8 text-red-600 dark:text-red-400" />
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+            <div className="space-y-8">
+              <div className="text-center">
+                <div className="w-10 h-10 bg-destructive rounded-full flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle className="w-5 h-5 text-destructive-foreground" />
                 </div>
-                <h1 className="text-3xl font-bold mb-4 text-red-600 dark:text-red-400">
-                  Secret Already Burned
-                </h1>
-                <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
-                  This secret has already been accessed and permanently destroyed. 
-                  Even the original sender cannot recover it.
+                <h1 className="text-2xl font-medium mb-2 text-foreground">Secret already burned</h1>
+                <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+                  This secret has already been accessed and permanently destroyed.
                 </p>
+              </div>
 
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-8">
-                  <p className="text-sm text-red-700 dark:text-red-300">
-                    🔥 This is the security guarantee of FlameLink - once burned, secrets are cryptographically impossible to recover.
-                  </p>
-                </div>
-
-                <div className="flex gap-4 justify-center">
-                  <Link href="/create">
-                    <Button>
-                      Create Your Own Secret
-                    </Button>
-                  </Link>
-                  <Link href="/">
-                    <Button variant="outline">
-                      Back to Home
-                    </Button>
-                  </Link>
-                </div>
-              </Card>
-            </motion.div>
-          </div>
+              <div className="flex gap-3">
+                <Link href="/create" className="flex-1">
+                  <Button className="w-full">Create a secret</Button>
+                </Link>
+                <Link href="/" className="flex-1">
+                  <Button variant="outline" className="w-full bg-transparent">
+                    Home
+                  </Button>
+                </Link>
+              </div>
+            </div>
+          </motion.div>
         </div>
       </div>
     )
@@ -351,54 +307,67 @@ export default function SecretPage() {
   // Error state
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-8">
-        <div className="flex items-center gap-4 mb-8">
+      <div className="container mx-auto px-4 py-8 max-w-xl">
+        <div className="mb-8">
           <Link href="/">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Home
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground -ml-2">
+              <ArrowLeft className="w-4 h-4 mr-1" />
+              Back
             </Button>
           </Link>
         </div>
 
-        <div className="max-w-2xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            <Card className="p-8 text-center">
-              <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+          <div className="space-y-8">
+            <div className="text-center">
+              <div className="w-10 h-10 bg-destructive rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-5 h-5 text-destructive-foreground" />
               </div>
-              <h1 className="text-3xl font-bold mb-4 text-red-600 dark:text-red-400">
-                Error Loading Secret
-              </h1>
-              <p className="text-muted-foreground mb-8 max-w-md mx-auto leading-relaxed">
-                {error || 'An unexpected error occurred while retrieving the secret.'}
+              <h1 className="text-2xl font-medium mb-2 text-foreground">Unable to load secret</h1>
+              <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+                {(() => {
+                  if (!error) return "An unexpected error occurred while retrieving the secret."
+
+                  try {
+                    const parsedError = JSON.parse(error)
+                    if (parsedError.error === "Already claimed") {
+                      return "This secret has already been accessed and is no longer available."
+                    }
+                    if (parsedError.error) {
+                      return parsedError.error
+                    }
+                  } catch {
+                    if (error.includes("Already claimed")) {
+                      return "This secret has already been accessed and is no longer available."
+                    }
+                    if (error.includes('{"error":')) {
+                      const match = error.match(/"error":"([^"]+)"/)
+                      if (match && match[1]) {
+                        if (match[1] === "Already claimed") {
+                          return "This secret has already been accessed and is no longer available."
+                        }
+                        return match[1]
+                      }
+                    }
+                  }
+
+                  return error
+                })()}
               </p>
+            </div>
 
-              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-8">
-                <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                  💡 Common causes: Invalid link, network issues, or secret has already been accessed.
-                </p>
-              </div>
-
-              <div className="flex gap-4 justify-center">
-                <Link href="/create">
-                  <Button>
-                    Create New Secret
-                  </Button>
-                </Link>
-                <Link href="/">
-                  <Button variant="outline">
-                    Back to Home
-                  </Button>
-                </Link>
-              </div>
-            </Card>
-          </motion.div>
-        </div>
+            <div className="flex gap-3">
+              <Link href="/create" className="flex-1">
+                <Button className="w-full">Create a secret</Button>
+              </Link>
+              <Link href="/" className="flex-1">
+                <Button variant="outline" className="w-full bg-transparent">
+                  Home
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </motion.div>
       </div>
     </div>
   )
