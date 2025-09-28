@@ -44,7 +44,7 @@ export async function encryptSecret(plaintext: string): Promise<EncryptedData> {
 
   // Encrypt the data
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv as BufferSource },
     key,
     data
   )
@@ -78,7 +78,7 @@ export async function decryptSecret(
 
   // Decrypt the data
   const decryptedData = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv as BufferSource },
     key,
     ciphertext
   )
@@ -256,7 +256,7 @@ export async function encryptFile(file: File): Promise<EncryptedFile> {
 
   // Encrypt the combined data
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv as BufferSource },
     key,
     combinedData
   )
@@ -293,7 +293,7 @@ export async function decryptFile(
 
   // Decrypt the data
   const decryptedData = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv as BufferSource },
     key,
     ciphertext as ArrayBuffer
   )
